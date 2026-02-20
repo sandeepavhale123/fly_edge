@@ -156,18 +156,19 @@ serve(async (req: Request) => {
     await sendCommand("DATA");
 
     const boundary = `----=_Part_${Date.now()}`;
-    const htmlBody = `
-      <h2>🎉 SMTP Test Successful!</h2>
-      <p>Your SMTP configuration is working correctly.</p>
-      <table style="border-collapse:collapse;margin:16px 0;">
-        <tr><td style="padding:4px 12px;border:1px solid #ddd;font-weight:bold;">Host</td><td style="padding:4px 12px;border:1px solid #ddd;">${host}</td></tr>
-        <tr><td style="padding:4px 12px;border:1px solid #ddd;font-weight:bold;">Port</td><td style="padding:4px 12px;border:1px solid #ddd;">${port}</td></tr>
-        <tr><td style="padding:4px 12px;border:1px solid #ddd;font-weight:bold;">Secure</td><td style="padding:4px 12px;border:1px solid #ddd;">${secure}</td></tr>
-        <tr><td style="padding:4px 12px;border:1px solid #ddd;font-weight:bold;">From</td><td style="padding:4px 12px;border:1px solid #ddd;">${from_name} &lt;${from_email}&gt;</td></tr>
-        <tr><td style="padding:4px 12px;border:1px solid #ddd;font-weight:bold;">CC</td><td style="padding:4px 12px;border:1px solid #ddd;">${cc_email || 'None'}</td></tr>
-        <tr><td style="padding:4px 12px;border:1px solid #ddd;font-weight:bold;">Sent At</td><td style="padding:4px 12px;border:1px solid #ddd;">${new Date().toISOString()}</td></tr>
-      </table>
-    `;
+    
+    const htmlBody = [
+  '<h2>🎉 SMTP Test Successful!</h2>',
+  '<p>Your SMTP configuration is working correctly.</p>',
+  '<table style="border-collapse:collapse;margin:16px 0;">',
+  `  <tr><td style="padding:4px 12px;border:1px solid #ddd;font-weight:bold;">Host</td><td style="padding:4px 12px;border:1px solid #ddd;">${host}</td></tr>`,
+  `  <tr><td style="padding:4px 12px;border:1px solid #ddd;font-weight:bold;">Port</td><td style="padding:4px 12px;border:1px solid #ddd;">${port}</td></tr>`,
+  `  <tr><td style="padding:4px 12px;border:1px solid #ddd;font-weight:bold;">Secure</td><td style="padding:4px 12px;border:1px solid #ddd;">${secure}</td></tr>`,
+  `  <tr><td style="padding:4px 12px;border:1px solid #ddd;font-weight:bold;">From</td><td style="padding:4px 12px;border:1px solid #ddd;">${from_name} &lt;${from_email}&gt;</td></tr>`,
+  `  <tr><td style="padding:4px 12px;border:1px solid #ddd;font-weight:bold;">CC</td><td style="padding:4px 12px;border:1px solid #ddd;">${cc_email || 'None'}</td></tr>`,
+  `  <tr><td style="padding:4px 12px;border:1px solid #ddd;font-weight:bold;">Sent At</td><td style="padding:4px 12px;border:1px solid #ddd;">${new Date().toISOString()}</td></tr>`,
+  '</table>'
+].join('');
 
     const messageParts = [
       `From: "${from_name || 'Test'}" <${from_email}>`,
