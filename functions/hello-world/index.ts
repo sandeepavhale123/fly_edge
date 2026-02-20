@@ -1,40 +1,65 @@
 import { serve } from "https://deno.land/std@0.131.0/http/server.ts"
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 
-interface ReqPayload {
-  name: string;
-}
-
-console.log("hello-world started");
+console.log('Database connection test started');
 
 serve(async (req: Request) => {
-  // Allow GET request (so browser works)
-  if (req.method === "GET") {
-    return new Response("Hello World sandeep 🚀", {
-      status: 200,
-    });
-  }
+  try {
+    // Get Supabase credentials from environment variables
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
+    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
 
-  // Handle POST with JSON
-  if (req.method === "POST") {
-    try {
-      const { name }: ReqPayload = await req.json();
-
-      const data = {
-        message: `Hello ${name} from Supabase Edge Functions!`,
-      };
-
-      return new Response(JSON.stringify(data), {
-        headers: { "Content-Type": "application/json" },
-      });
-
-    } catch (error) {
+    if (!supabaseUrl || !supabaseKey) {
       return new Response(
-        JSON.stringify({ error: "Invalid JSON body" }),
-        { status: 400 }
+        JSON.stringify({
+          success: false,
+          error: 'Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY environment variables'
+        }),
+        { headers: { "Content-Type": "application/json" }, status: 400 }
       );
     }
+
+    // Initialize Supabase client
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    // Query auth users (emails)
+    const { data, error } = await supabase
+      .from('auth.users')
+      .select('id, email, created_at')
+      .limit(100);
+
+    if (error) {
+      console.error('Database error:', error);
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: error.message,
+          details: error
+        }),
+        { headers: { "Content-Type": "application/json" }, status: 500 }
+      );
+    }
+
+    console.log('Successfully fetched auth emails:', data);
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        message: 'Database connection successful',
+        auth_users_count: data?.length || 0,
+        users: data || []
+      }),
+      { headers: { "Content-Type": "application/json", "Connection": "keep-alive" } }
+    );
+
+  } catch (error) {
+    console.error('Error:', error);
+    return new Response(
+      JSON.stringify({
+        success: false,
+        error: error.message
+      }),
+      { headers: { "Content-Type": "application/json" }, status: 500 }
+    );
   }
-
-  return new Response("Method Not Allowed", { status: 405 });
-
-}, { port: 9005 });
+}, { port: 9005 })
