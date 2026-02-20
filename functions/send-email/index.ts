@@ -1,13 +1,13 @@
 import { serve } from "https://deno.land/std@0.131.0/http/server.ts"
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
+
+console.log('Send-email function started');
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
+    "authorization, x-client-info, apikey, content-type",
 };
-
-console.log('Send email function started');
 
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -24,8 +24,16 @@ serve(async (req: Request) => {
       );
     }
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
+    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+
+    if (!supabaseUrl || !supabaseServiceKey) {
+      return new Response(
+        JSON.stringify({ error: "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY environment variables" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     const supabase = createClient(supabaseUrl, supabaseServiceKey, {
       auth: {
         autoRefreshToken: false,
@@ -42,6 +50,7 @@ serve(async (req: Request) => {
       .single();
 
     if (smtpError || !smtpData) {
+      console.error("SMTP error:", smtpError);
       return new Response(
         JSON.stringify({ error: "SMTP not configured. Please set up SMTP in Settings." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -58,6 +67,7 @@ serve(async (req: Request) => {
       .single();
 
     if (templateError || !templateData) {
+      console.error("Template error:", templateError);
       return new Response(
         JSON.stringify({ error: "Email template not found." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -75,6 +85,7 @@ serve(async (req: Request) => {
     });
 
     if (insertError) {
+      console.error("Insert error:", insertError);
       return new Response(
         JSON.stringify({ error: "Failed to create verification token: " + insertError.message }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -96,7 +107,7 @@ serve(async (req: Request) => {
     // Build CC header
     const ccEmail = smtpData.cc_email || "";
 
-    // Send email via SMTP using Deno's built-in TCP
+    // Send email via SMTP
     await sendSmtpEmail({
       host: smtpData.host,
       port: smtpData.port,
@@ -111,6 +122,8 @@ serve(async (req: Request) => {
       htmlBody,
     });
 
+    console.log("Verification email sent to:", email);
+
     return new Response(
       JSON.stringify({ success: true, message: "Verification email sent" }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -122,7 +135,7 @@ serve(async (req: Request) => {
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
-}, { port: 9006 });
+}, { port: 9006 })
 
 interface SmtpParams {
   host: string;
@@ -145,10 +158,10 @@ async function sendSmtpEmail(params: SmtpParams) {
   const decoder = new TextDecoder();
 
   // Connect to SMTP server
-  let conn: Deno.TcpConn;
-  
+  let conn: Deno.Conn;
+
   if (params.secure || port === 465) {
-    conn = await Deno.connectTls({ hostname: host, port }) as unknown as Deno.TcpConn;
+    conn = await Deno.connectTls({ hostname: host, port });
   } else {
     conn = await Deno.connect({ hostname: host, port });
   }
@@ -175,7 +188,7 @@ async function sendSmtpEmail(params: SmtpParams) {
   if (!params.secure && port !== 465) {
     if (ehloResponse.includes("STARTTLS")) {
       await sendCommand("STARTTLS");
-      conn = await Deno.startTls(conn as Deno.TcpConn, { hostname: host }) as unknown as Deno.TcpConn;
+      conn = await Deno.startTls(conn as Deno.TcpConn, { hostname: host });
       ehloResponse = await sendCommand(`EHLO localhost`);
     }
   }
@@ -206,8 +219,7 @@ async function sendSmtpEmail(params: SmtpParams) {
 
   // Build MIME message
   const boundary = `----=_Part_${Date.now()}`;
-  const ccHeader = ccEmail ? `Cc: ${ccEmail}\r\n` : "";
-  
+
   const message = [
     `From: "${fromName}" <${fromEmail}>`,
     `To: ${toEmail}`,
