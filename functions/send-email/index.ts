@@ -125,4 +125,4 @@ serve(async (req: Request) => {
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
-}, { port: 9007 })
+}, { port: 9000 })
