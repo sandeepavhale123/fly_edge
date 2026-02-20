@@ -9,7 +9,7 @@ console.log("hello-world started");
 serve(async (req: Request) => {
   // Allow GET request (so browser works)
   if (req.method === "GET") {
-    return new Response("Hello World 🚀", {
+    return new Response("Hello World sandeep 🚀", {
       status: 200,
     });
   }
