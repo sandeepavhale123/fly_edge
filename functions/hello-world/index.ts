@@ -20,13 +20,15 @@ serve(async (req: Request) => {
     }
 
     // Initialize Supabase client
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    const supabase = createClient(supabaseUrl, supabaseKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+      },
+    });
 
-    // Query auth users (emails)
-    const { data, error } = await supabase
-      .from('auth.users')
-      .select('id, email, created_at')
-      .limit(100);
+    // Query auth users using admin API
+    const { data: { users }, error } = await supabase.auth.admin.listUsers();
 
     if (error) {
       console.error('Database error:', error);
@@ -40,14 +42,14 @@ serve(async (req: Request) => {
       );
     }
 
-    console.log('Successfully fetched auth emails:', data);
+    console.log('Successfully fetched auth emails:', users);
 
     return new Response(
       JSON.stringify({
         success: true,
         message: 'Database connection successful',
-        auth_users_count: data?.length || 0,
-        users: data || []
+        auth_users_count: users?.length || 0,
+        users: users?.map(u => ({ id: u.id, email: u.email, created_at: u.created_at })) || []
       }),
       { headers: { "Content-Type": "application/json", "Connection": "keep-alive" } }
     );
