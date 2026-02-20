@@ -1,12 +1,10 @@
 import { serve } from "https://deno.land/std@0.131.0/http/server.ts"
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 
-console.log('Send-email function started');
+console.log('Test SMTP function started on port 9007');
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
 serve(async (req: Request) => {
@@ -15,239 +13,116 @@ serve(async (req: Request) => {
   }
 
   try {
-    const { email, fullName, userId, siteUrl } = await req.json();
+    const { host, port, username, password, secure, fromEmail, fromName, toEmail, subject, body } = await req.json();
 
-    if (!email || !userId || !siteUrl) {
+    // Validate required fields
+    if (!host || !port || !username || !password || !fromEmail || !toEmail) {
       return new Response(
-        JSON.stringify({ error: "Missing required fields: email, userId, siteUrl" }),
+        JSON.stringify({ success: false, error: "Missing required fields: host, port, username, password, fromEmail, toEmail" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+    console.log(`Connecting to SMTP: ${host}:${port} (secure: ${secure})`);
 
-    if (!supabaseUrl || !supabaseServiceKey) {
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+
+    // Connect
+    let conn: Deno.Conn;
+    if (secure || port === 465) {
+      conn = await Deno.connectTls({ hostname: host, port });
+    } else {
+      conn = await Deno.connect({ hostname: host, port });
+    }
+
+    async function readResponse(): Promise<string> {
+      const buf = new Uint8Array(4096);
+      const n = await conn.read(buf);
+      if (n === null) throw new Error("Connection closed");
+      const resp = decoder.decode(buf.subarray(0, n));
+      console.log("SMTP <<", resp.trim());
+      return resp;
+    }
+
+    async function sendCommand(cmd: string): Promise<string> {
+      console.log("SMTP >>", cmd.startsWith("AUTH") || cmd === btoa(username) || cmd === btoa(password) ? "[REDACTED]" : cmd);
+      await conn.write(encoder.encode(cmd + "\r\n"));
+      return await readResponse();
+    }
+
+    // Greeting
+    const greeting = await readResponse();
+    console.log("Greeting:", greeting.trim());
+
+    // EHLO
+    let ehloResponse = await sendCommand("EHLO localhost");
+
+    // STARTTLS
+    if (!secure && port !== 465) {
+      if (ehloResponse.includes("STARTTLS")) {
+        await sendCommand("STARTTLS");
+        conn = await Deno.startTls(conn as Deno.TcpConn, { hostname: host });
+        ehloResponse = await sendCommand("EHLO localhost");
+      }
+    }
+
+    // AUTH
+    await sendCommand("AUTH LOGIN");
+    await sendCommand(btoa(username));
+    const authResp = await sendCommand(btoa(password));
+
+    if (!authResp.startsWith("235")) {
+      conn.close();
       return new Response(
-        JSON.stringify({ error: "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY environment variables" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({ success: false, error: "SMTP auth failed: " + authResp.trim() }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    const supabase = createClient(supabaseUrl, supabaseServiceKey, {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false,
-      },
-    });
+    // MAIL FROM / RCPT TO
+    await sendCommand(`MAIL FROM:<${fromEmail}>`);
+    await sendCommand(`RCPT TO:<${toEmail}>`);
 
-    // Get active SMTP settings
-    const { data: smtpData, error: smtpError } = await supabase
-      .from("smtp_settings")
-      .select("*")
-      .eq("is_active", true)
-      .limit(1)
-      .single();
+    // DATA
+    await sendCommand("DATA");
 
-    if (smtpError || !smtpData) {
-      console.error("SMTP error:", smtpError);
+    const message = [
+      `From: "${fromName || 'Test'}" <${fromEmail}>`,
+      `To: ${toEmail}`,
+      `Subject: ${subject || 'SMTP Test Email'}`,
+      `MIME-Version: 1.0`,
+      `Content-Type: text/html; charset=UTF-8`,
+      `Date: ${new Date().toUTCString()}`,
+      ``,
+      body || `<h2>SMTP Test Successful!</h2><p>If you see this, your SMTP configuration is working correctly.</p><p>Sent at: ${new Date().toISOString()}</p>`,
+    ].join("\r\n");
+
+    const dataResp = await sendCommand(message + "\r\n.");
+
+    if (!dataResp.startsWith("250")) {
+      conn.close();
       return new Response(
-        JSON.stringify({ error: "SMTP not configured. Please set up SMTP in Settings." }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Get active email template
-    const { data: templateData, error: templateError } = await supabase
-      .from("email_templates")
-      .select("*")
-      .eq("template_type", "signup_verification")
-      .eq("is_active", true)
-      .limit(1)
-      .single();
-
-    if (templateError || !templateData) {
-      console.error("Template error:", templateError);
-      return new Response(
-        JSON.stringify({ error: "Email template not found." }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Generate verification token
-    const token = crypto.randomUUID();
-
-    // Store verification record
-    const { error: insertError } = await supabase.from("email_verifications").insert({
-      user_id: userId,
-      token,
-      email,
-    });
-
-    if (insertError) {
-      console.error("Insert error:", insertError);
-      return new Response(
-        JSON.stringify({ error: "Failed to create verification token: " + insertError.message }),
+        JSON.stringify({ success: false, error: "Send failed: " + dataResp.trim() }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Build verification link
-    const verificationLink = `${siteUrl}/verify-email?token=${token}`;
+    await sendCommand("QUIT");
+    conn.close();
 
-    // Replace template variables
-    const htmlBody = templateData.body_html
-      .replace(/\{\{full_name\}\}/g, fullName || "User")
-      .replace(/\{\{verification_link\}\}/g, verificationLink)
-      .replace(/\{\{email\}\}/g, email);
-
-    const subject = templateData.subject
-      .replace(/\{\{full_name\}\}/g, fullName || "User");
-
-    // Build CC header
-    const ccEmail = smtpData.cc_email || "";
-
-    // Send email via SMTP
-    await sendSmtpEmail({
-      host: smtpData.host,
-      port: smtpData.port,
-      username: smtpData.username,
-      password: smtpData.password,
-      secure: smtpData.secure,
-      fromEmail: smtpData.from_email,
-      fromName: smtpData.from_name || "Todo App",
-      toEmail: email,
-      ccEmail,
-      subject,
-      htmlBody,
-    });
-
-    console.log("Verification email sent to:", email);
+    console.log("Test email sent successfully to:", toEmail);
 
     return new Response(
-      JSON.stringify({ success: true, message: "Verification email sent" }),
+      JSON.stringify({ success: true, message: `Test email sent to ${toEmail}` }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
+
   } catch (error) {
-    console.error("Send email error:", error);
+    console.error("SMTP test error:", error);
     return new Response(
-      JSON.stringify({ error: error.message || "Internal server error" }),
+      JSON.stringify({ success: false, error: error.message }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
-}, { port: 9006 })
-
-interface SmtpParams {
-  host: string;
-  port: number;
-  username: string;
-  password: string;
-  secure: boolean;
-  fromEmail: string;
-  fromName: string;
-  toEmail: string;
-  ccEmail: string;
-  subject: string;
-  htmlBody: string;
-}
-
-async function sendSmtpEmail(params: SmtpParams) {
-  const { host, port, username, password, fromEmail, fromName, toEmail, ccEmail, subject, htmlBody } = params;
-
-  const encoder = new TextEncoder();
-  const decoder = new TextDecoder();
-
-  // Connect to SMTP server
-  let conn: Deno.Conn;
-
-  if (params.secure || port === 465) {
-    conn = await Deno.connectTls({ hostname: host, port });
-  } else {
-    conn = await Deno.connect({ hostname: host, port });
-  }
-
-  async function readResponse(): Promise<string> {
-    const buf = new Uint8Array(4096);
-    const n = await conn.read(buf);
-    if (n === null) throw new Error("Connection closed");
-    return decoder.decode(buf.subarray(0, n));
-  }
-
-  async function sendCommand(cmd: string): Promise<string> {
-    await conn.write(encoder.encode(cmd + "\r\n"));
-    return await readResponse();
-  }
-
-  // Read server greeting
-  await readResponse();
-
-  // EHLO
-  let ehloResponse = await sendCommand(`EHLO localhost`);
-
-  // STARTTLS for non-SSL connections on port 587
-  if (!params.secure && port !== 465) {
-    if (ehloResponse.includes("STARTTLS")) {
-      await sendCommand("STARTTLS");
-      conn = await Deno.startTls(conn as Deno.TcpConn, { hostname: host });
-      ehloResponse = await sendCommand(`EHLO localhost`);
-    }
-  }
-
-  // AUTH LOGIN
-  await sendCommand("AUTH LOGIN");
-  await sendCommand(btoa(username));
-  const authResponse = await sendCommand(btoa(password));
-
-  if (!authResponse.startsWith("235")) {
-    conn.close();
-    throw new Error("SMTP authentication failed: " + authResponse);
-  }
-
-  // MAIL FROM
-  await sendCommand(`MAIL FROM:<${fromEmail}>`);
-
-  // RCPT TO
-  await sendCommand(`RCPT TO:<${toEmail}>`);
-
-  // CC recipient
-  if (ccEmail) {
-    await sendCommand(`RCPT TO:<${ccEmail}>`);
-  }
-
-  // DATA
-  await sendCommand("DATA");
-
-  // Build MIME message
-  const boundary = `----=_Part_${Date.now()}`;
-
-  const message = [
-    `From: "${fromName}" <${fromEmail}>`,
-    `To: ${toEmail}`,
-    ccEmail ? `Cc: ${ccEmail}` : "",
-    `Subject: ${subject}`,
-    `MIME-Version: 1.0`,
-    `Content-Type: multipart/alternative; boundary="${boundary}"`,
-    `Date: ${new Date().toUTCString()}`,
-    ``,
-    `--${boundary}`,
-    `Content-Type: text/html; charset=UTF-8`,
-    `Content-Transfer-Encoding: 7bit`,
-    ``,
-    htmlBody,
-    ``,
-    `--${boundary}--`,
-  ]
-    .filter(Boolean)
-    .join("\r\n");
-
-  const dataResponse = await sendCommand(message + "\r\n.");
-
-  if (!dataResponse.startsWith("250")) {
-    conn.close();
-    throw new Error("Failed to send email: " + dataResponse);
-  }
-
-  // QUIT
-  await sendCommand("QUIT");
-  conn.close();
-}
+}, { port: 9007 })
