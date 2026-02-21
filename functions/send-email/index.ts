@@ -210,15 +210,17 @@ serve(async (req: Request) => {
 
     const boundary = `----=_Part_${Date.now()}`;
 
-    const messageParts = [
+    const headers = [
       `From: "${from_name || 'Test'}" <${from_email}>`,
       `To: ${email}`,
-      cc_email ? `Cc: ${cc_email}` : "",
+      ...(cc_email ? [`Cc: ${cc_email}`] : []),
       `Subject: ${subject}`,
       `MIME-Version: 1.0`,
       `Content-Type: multipart/alternative; boundary="${boundary}"`,
       `Date: ${new Date().toUTCString()}`,
-      ``,
+    ];
+
+    const body = [
       `--${boundary}`,
       `Content-Type: text/html; charset=UTF-8`,
       `Content-Transfer-Encoding: 7bit`,
@@ -226,7 +228,9 @@ serve(async (req: Request) => {
       htmlBody,
       ``,
       `--${boundary}--`,
-    ].filter(Boolean).join("\r\n");
+    ];
+
+    const messageParts = headers.join("\r\n") + "\r\n\r\n" + body.join("\r\n");
 
     const dataResp = await sendCommand(messageParts + "\r\n.");
 
