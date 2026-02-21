@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.131.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 
-console.log('Test SMTP function started on port 9007');
+console.log('Send-email function started on port 9006');
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -20,6 +20,15 @@ serve(async (req: Request) => {
   }
 
   try {
+    const { email, fullName, userId, siteUrl } = await req.json();
+
+    if (!email || !userId || !siteUrl) {
+      return new Response(
+        JSON.stringify({ error: "Missing required fields: email, userId, siteUrl", debug: debugLog }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     // Step 1: Connect to Supabase
     const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
@@ -37,7 +46,7 @@ serve(async (req: Request) => {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
-    // Step 2: Fetch SMTP settings from smtp_settings table
+    // Step 2: Fetch SMTP settings
     log("📡 Fetching SMTP settings from smtp_settings table...");
     const { data: smtp, error: smtpError } = await supabase
       .from("smtp_settings")
@@ -65,13 +74,57 @@ serve(async (req: Request) => {
     const { host, port, username, password, secure, from_email, from_name, cc_email } = smtp;
     log(`✅ SMTP config loaded: host=${host}, port=${port}, secure=${secure}, from=${from_email}, cc=${cc_email || 'none'}`);
 
-    const toEmail = "sandy.avhale143@gmail.com";
-    log(`📧 Sending test email to: ${toEmail}`);
+    // Step 3: Get active email template
+    log("📡 Fetching email template...");
+    const { data: templateData, error: templateError } = await supabase
+      .from("email_templates")
+      .select("*")
+      .eq("template_type", "signup_verification")
+      .eq("is_active", true)
+      .limit(1)
+      .maybeSingle();
 
+    if (templateError || !templateData) {
+      log(`❌ Template error: ${templateError?.message || "No active template found"}`);
+      return new Response(
+        JSON.stringify({ success: false, error: "Email template not found.", debug: debugLog }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    log("✅ Email template loaded");
+
+    // Step 4: Generate verification token
+    const token = crypto.randomUUID();
+    const { error: insertError } = await supabase.from("email_verifications").insert({
+      user_id: userId,
+      token,
+      email,
+    });
+
+    if (insertError) {
+      log(`❌ Insert error: ${insertError.message}`);
+      return new Response(
+        JSON.stringify({ success: false, error: "Failed to create verification token: " + insertError.message, debug: debugLog }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const verificationLink = `${siteUrl}/verify-email?token=${token}`;
+    log(`✅ Verification link created: ${verificationLink}`);
+
+    // Step 5: Replace template variables
+    const htmlBody = templateData.body_html
+      .replace(/\{\{full_name\}\}/g, fullName || "User")
+      .replace(/\{\{verification_link\}\}/g, verificationLink)
+      .replace(/\{\{email\}\}/g, email);
+
+    const subject = templateData.subject
+      .replace(/\{\{full_name\}\}/g, fullName || "User");
+
+    // Step 6: Connect to SMTP server (using proven test-smtp logic)
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
 
-    // Step 3: Connect to SMTP server
     log(`🔌 Connecting to ${host}:${port} (secure: ${secure})...`);
     let conn: Deno.Conn;
     if (secure || port === 465) {
@@ -97,7 +150,7 @@ serve(async (req: Request) => {
       return await readResponse();
     }
 
-    // Step 4: SMTP handshake
+    // Step 7: SMTP handshake
     const greeting = await readResponse();
     log(`✅ Server greeting received`);
 
@@ -116,7 +169,7 @@ serve(async (req: Request) => {
       }
     }
 
-    // Step 5: AUTH
+    // Step 8: AUTH
     log("🔑 Authenticating...");
     await sendCommand("AUTH LOGIN");
     await sendCommand(btoa(username), true);
@@ -132,13 +185,13 @@ serve(async (req: Request) => {
     }
     log("✅ Authentication successful");
 
-    // Step 6: MAIL FROM / RCPT TO
+    // Step 9: MAIL FROM / RCPT TO
     const mailFromResp = await sendCommand(`MAIL FROM:<${from_email}>`);
     if (!mailFromResp.startsWith("250")) {
       log(`❌ MAIL FROM rejected: ${mailFromResp.trim()}`);
     }
 
-    const rcptToResp = await sendCommand(`RCPT TO:<${toEmail}>`);
+    const rcptToResp = await sendCommand(`RCPT TO:<${email}>`);
     if (!rcptToResp.startsWith("250")) {
       log(`❌ RCPT TO rejected: ${rcptToResp.trim()}`);
     }
@@ -152,32 +205,20 @@ serve(async (req: Request) => {
       }
     }
 
-    // Step 7: DATA
+    // Step 10: DATA
     await sendCommand("DATA");
 
     const boundary = `----=_Part_${Date.now()}`;
-    const htmlBody = `
-      <h2>🎉 SMTP Test Successful!</h2>
-      <p>Your SMTP configuration is working correctly.</p>
-      <table style="border-collapse:collapse;margin:16px 0;">
-        <tr><td style="padding:4px 12px;border:1px solid #ddd;font-weight:bold;">Host</td><td style="padding:4px 12px;border:1px solid #ddd;">${host}</td></tr>
-        <tr><td style="padding:4px 12px;border:1px solid #ddd;font-weight:bold;">Port</td><td style="padding:4px 12px;border:1px solid #ddd;">${port}</td></tr>
-        <tr><td style="padding:4px 12px;border:1px solid #ddd;font-weight:bold;">Secure</td><td style="padding:4px 12px;border:1px solid #ddd;">${secure}</td></tr>
-        <tr><td style="padding:4px 12px;border:1px solid #ddd;font-weight:bold;">From</td><td style="padding:4px 12px;border:1px solid #ddd;">${from_name} &lt;${from_email}&gt;</td></tr>
-        <tr><td style="padding:4px 12px;border:1px solid #ddd;font-weight:bold;">CC</td><td style="padding:4px 12px;border:1px solid #ddd;">${cc_email || 'None'}</td></tr>
-        <tr><td style="padding:4px 12px;border:1px solid #ddd;font-weight:bold;">Sent At</td><td style="padding:4px 12px;border:1px solid #ddd;">${new Date().toISOString()}</td></tr>
-      </table>
-    `;
 
     const messageParts = [
       `From: "${from_name || 'Test'}" <${from_email}>`,
-      `To: ${toEmail}`,
-      ...(cc_email ? [`Cc: ${cc_email}`] : []),
-      `Subject: SMTP Test - ${new Date().toLocaleString()}`,
+      `To: ${email}`,
+      cc_email ? `Cc: ${cc_email}` : "",
+      `Subject: ${subject}`,
       `MIME-Version: 1.0`,
       `Content-Type: multipart/alternative; boundary="${boundary}"`,
       `Date: ${new Date().toUTCString()}`,
-      ``, // Blank line separator between headers and body
+      ``,
       `--${boundary}`,
       `Content-Type: text/html; charset=UTF-8`,
       `Content-Transfer-Encoding: 7bit`,
@@ -185,7 +226,7 @@ serve(async (req: Request) => {
       htmlBody,
       ``,
       `--${boundary}--`,
-    ].join("\r\n");
+    ].filter(Boolean).join("\r\n");
 
     const dataResp = await sendCommand(messageParts + "\r\n.");
 
@@ -198,7 +239,7 @@ serve(async (req: Request) => {
       );
     }
 
-    log("✅ Email sent successfully!");
+    log("✅ Verification email sent successfully!");
 
     await sendCommand("QUIT");
     conn.close();
@@ -206,8 +247,7 @@ serve(async (req: Request) => {
     return new Response(
       JSON.stringify({
         success: true,
-        message: `Test email sent to ${toEmail}` + (cc_email ? ` (CC: ${cc_email})` : ''),
-        smtp_config: { host, port, secure, from_email, from_name, cc_email: cc_email || null },
+        message: `Verification email sent to ${email}` + (cc_email ? ` (CC: ${cc_email})` : ''),
         debug: debugLog
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -215,10 +255,10 @@ serve(async (req: Request) => {
 
   } catch (error) {
     log(`❌ Error: ${error.message}`);
-    console.error("SMTP test error:", error);
+    console.error("Send email error:", error);
     return new Response(
       JSON.stringify({ success: false, error: error.message, debug: debugLog }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
-}, { port: 9000 })
+}, { port: 9006 })
